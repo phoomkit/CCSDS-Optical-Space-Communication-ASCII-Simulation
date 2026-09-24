@@ -1,0 +1,52 @@
+{
+  "scope": "Educational simplified CCSDS-inspired optical link; not full SCPPM compliance",
+  "input_message": "nice",
+  "recovered_message": "~ice",
+  "original_ascii_bytes": 4,
+  "padding_added": false,
+  "frame_count": 2,
+  "packet_format": "ASM(32) + payload(16) + CCSDS optical CRC-32(32)",
+  "asm_hex": "0x1ACFFC1D",
+  "crc_generator_polynomial": "x^32 + x^29 + x^18 + x^14 + x^3 + 1",
+  "crc_polynomial_hex_without_x32": "0x20044009",
+  "ppm_order": 4,
+  "guard_slots_per_symbol": 1,
+  "slot_width_ns": 512.0,
+  "slots_per_packet": 200,
+  "packet_duration_us": 102.4,
+  "package_bit_rate_bps": 781250.0,
+  "payload_rate_bps": 156250.0,
+  "demo_signal_photons_per_on_pulse": 5.0,
+  "background_photons_per_slot": 0.1,
+  "turbulence_model": "unit-mean log-normal, one independent H per frame",
+  "sigma_ln_intensity": 0.4,
+  "scintillation_index": 0.17351087099181028,
+  "timing": "ideal",
+  "eye_samples_per_slot": 32,
+  "receiver_filter": "none",
+  "ber_frames_per_point": 50000,
+  "ber_payload_bits_per_point": 800000,
+  "random_seed": 2026,
+  "standard_values": {
+    "ASM, CRC polynomial, 4-PPM mapping, one guard slot, and 512 ns slot width": "CCSDS 141.0-B-1 and 142.0-B-1"
+  },
+  "educational_values_not_set_by_ccsds": {
+    "signal_photon_sweep": [
+      0.1,
+      0.2,
+      0.4,
+      0.7,
+      1.0,
+      1.5,
+      2.0,
+      3.0,
+      5.0,
+      8.0,
+      12.0,
+      20.0
+    ],
+    "demo_signal_photons": 5.0,
+    "background_photons": 0.1,
+    "sigma_ln": 0.4
+  }
+}

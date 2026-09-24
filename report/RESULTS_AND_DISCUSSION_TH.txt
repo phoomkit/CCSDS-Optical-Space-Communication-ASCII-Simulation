@@ -1,0 +1,230 @@
+3. ผลการจำลองระบบและการอภิปรายผล
+=======================================
+
+ขอบเขตของงานนี้เป็นการจำลองระบบ CCSDS-inspired optical link สำหรับการศึกษา ไม่ใช่การทำ CCSDS 142.0-B-1 SCPPM แบบเต็ม ระบบใช้แพ็กเกจ ASM 32 บิต + payload 16 บิต + CRC-32 32 บิต แล้วทำ 4-PPM พร้อม guard slot หนึ่ง slot โดยไม่ใช้ RS, LDPC, convolutional encoder, interleaver, pseudo-randomizer หรือ SCPPM inner coding
+
+3.1 ผลการจำลองระบบที่เอาต์พุตแต่ละบล็อก
+------------------------------------------------
+
+3.1.1 การตรวจสอบด้วยข้อมูลขนาดเล็ก
+
+ใช้ข้อความ "HI" เนื่องจากตัวอักษร ASCII หนึ่งตัวใช้ 8 บิต จึงได้ payload 16 บิตพอดี ตัวอักษร H มีค่า 0x48 หรือ 01001000 และ I มีค่า 0x49 หรือ 01001001 ดังนั้น payload เท่ากับ 0x4849
+
+ใช้ข้อความ "A" เป็นกรณีตรวจสอบ padding ตัวอักษร A มีค่า 0x41 และมีเพียง 8 บิต โปรแกรมจึงเติม 0x00 เพื่อให้ payload ครบ 16 บิต ได้ค่า 0x4100 การประกอบข้อความกลับใช้ความยาวเดิมหนึ่งไบต์ จึงตัดเฉพาะ padding ออกและไม่ทำให้ข้อมูล A สูญหาย
+
+ผล ideal/noiseless ใช้ค่า count=100 ใน ON slot และ count=0 ใน OFF/guard slot เพื่อแยกการตรวจสอบ logic ออกจากความสุ่มของ Poisson ผลที่ได้คือ packet bit error เท่ากับศูนย์, payload bit error เท่ากับศูนย์, CRC ผ่าน และข้อความหลัง demodulation ตรงกับอินพุตทุกประการ
+
+รายละเอียดบิตและตารางครบทุก 4-PPM symbol อยู่ใน report/block_output_trace.txt และ results/data/block_output_table.csv ตารางดังกล่าวแสดง input bit pair, PPM index, slot vector, received counts, detected index และ output bit pair จึงสามารถตรวจย้อนกลับได้ทุกบล็อก
+
+3.1.2 การประกอบแพ็กเกจ
+
+ASM ใช้ค่า 0x1ACFFC1D จำนวน 32 บิต payload มี 16 บิต และ CRC มี 32 บิต รวมเป็นแพ็กเกจ 80 บิต CRC คำนวณด้วยพหุนาม x^32 + x^29 + x^18 + x^14 + x^3 + 1 โดยคำนวณครอบคลุม payload ตามแบบจำลองย่อที่กำหนดไว้
+
+3.1.3 การทำ 4-PPM และ guard slot
+
+บิตถูกจัดกลุ่มครั้งละ 2 บิตและแปลงเป็น index 0 ถึง 3 ได้แก่ 00->0, 01->1, 10->2 และ 11->3 จากนั้นสร้าง one-hot slot vector ความยาว 4 แล้วเติม guard slot เป็นศูนย์อีกหนึ่งตำแหน่ง ดังนั้นหนึ่งสัญลักษณ์ใช้ 5 slots แพ็กเกจ 80 บิตมี 40 สัญลักษณ์และใช้ทั้งหมด 200 slots เมื่อ slot width เท่ากับ 512 ns ระยะเวลาแพ็กเกจเท่ากับ 102.4 microseconds
+
+3.1.4 กรณี noise ต่ำ
+
+กำหนด Ns=20 photons/pulse, Nb=0.01 photons/slot และไม่มี turbulence ผลของเฟรมตัวอย่าง "HI" คือ packet bit errors=0, payload bit errors=0 และ CRC pass=True ผลนี้แสดงว่าเมื่อ ON slot มีจำนวนโฟตอนสูงกว่า OFF slots ชัดเจน maximum-count detector สามารถเลือกตำแหน่ง pulse ได้ถูกต้อง
+
+3.1.5 กรณี photon-starved และมี turbulence
+
+กำหนด Ns=5, Nb=0.1 และ sigma_ln=0.4 ผลของเฟรมตัวอย่าง "HI" คือ fading coefficient H=0.8320, packet bit errors=4, payload bit errors=1 และ CRC pass=False ในกรณีนี้ค่าเฉลี่ยของ ON slot เท่ากับ Nb+NsH ขณะที่ OFF และ guard slots มีค่าเฉลี่ย Nb ความสุ่มของ Poisson อาจทำให้ OFF slot มี count สูงกว่า ON slot หรือเกิดการเสมอกัน จึงทำให้เลือก PPM index ผิดได้
+
+CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม่สามารถแก้ข้อผิดพลาด หาก payload ถูกต้องแต่บิตใน CRC field ผิด CRC ก็ยังสามารถรายงาน fail ได้ ในทางกลับกัน undetected error มีโอกาสต่ำมากแต่ไม่เป็นศูนย์ทางทฤษฎี
+
+3.2 ผลการจำลองสมรรถนะ
+--------------------------------
+
+3.2.1 วิธี Monte Carlo และความละเอียดของ BER
+
+ใช้ 50,000 เฟรมต่อหนึ่งจุด แต่ละเฟรมมี payload 16 บิต จึงเท่ากับ 800,000 payload bits ต่อจุด กราฟ BER แสดงช่วงความเชื่อมั่น 95% แบบ Wilson interval ถ้าไม่พบ error ไม่ควรสรุปว่า BER เท่ากับศูนย์ แต่ควรรายงานขอบเขตบนโดยประมาณด้วยกฎ 3/N ซึ่งในงานนี้เท่ากับ 3.75e-6 ต่อจุด
+
+3.2.2 BER เทียบกับจำนวนโฟตอน
+
+เมื่อ Ns เพิ่มขึ้น separation ระหว่าง ON และ OFF photon-count distributions เพิ่มขึ้น โอกาสที่ receiver จะเลือก slot ผิดจึงลดลง ที่ Ns=5 และ Nb=0.1 ผล Poisson อย่างเดียวให้ BER=6.808750e-03 ส่วนเมื่อเพิ่ม log-normal turbulence ที่ sigma_ln=0.4 ได้ BER=1.831625e-02 แสดงว่า fading ทำให้บางเฟรมได้รับพลังงานต่ำกว่าค่าเฉลี่ยและเพิ่ม BER
+
+3.2.3 การตรวจสอบกับทฤษฎี
+
+กรณีไม่มี turbulence ถูกเปรียบเทียบกับสมการ exact uncoded 4-PPM Poisson detection ซึ่งรวมการสุ่มตัดสินเมื่อหลาย slots มี count เท่ากัน ที่ Ns=5 ค่าทฤษฎีเท่ากับ 6.627532e-03 และ simulation เท่ากับ 6.808750e-03 ผลที่ใกล้กันช่วยยืนยันว่า Poisson generator, 4-PPM mapper และ maximum-count detector ทำงานสอดคล้องกัน
+
+3.2.4 BER เทียบกับ SNR
+
+เนื่องจากช่องสัญญาณนี้เป็น photon-counting Poisson channel จึงไม่ใช้ Eb/N0 แบบ AWGN โดยตรง งานนี้นิยาม nominal count-domain SNR = Ns^2/(Ns+2Nb) จากกำลังของผลต่างค่าเฉลี่ยระหว่าง ON/OFF หารด้วยผลรวม variance ของ Poisson สอง slots และแปลงเป็น dB ด้วย 10log10(SNR) นิยามนี้ใช้เพื่อจัดแกนเปรียบเทียบภายในแบบจำลอง ไม่ใช่ managed parameter ของ CCSDS
+
+3.2.5 ผลของ background photons
+
+เมื่อคง Ns=5 และ sigma_ln=0.4 ได้ผลดังนี้:
+- Nb=0.00 photons/slot: BER=1.129500e-02
+- Nb=0.01 photons/slot: BER=1.230250e-02
+- Nb=0.10 photons/slot: BER=1.801750e-02
+- Nb=0.50 photons/slot: BER=3.763250e-02
+- Nb=1.00 photons/slot: BER=5.865875e-02
+
+เมื่อ Nb เพิ่ม OFF slots มีโอกาสเกิด photon counts สูงขึ้น จึงแข่งขันกับ ON slot มากขึ้นและทำให้ BER เพิ่มขึ้น
+
+3.2.6 ผลของ atmospheric turbulence
+
+เมื่อคง Ns=5 และ Nb=0.1 ได้ผลดังนี้:
+- sigma_ln=0.0, SI=0.0000: BER=6.597500e-03
+- sigma_ln=0.2, SI=0.0408: BER=9.338750e-03
+- sigma_ln=0.4, SI=0.1735: BER=1.750250e-02
+- sigma_ln=0.6, SI=0.4333: BER=3.353000e-02
+- sigma_ln=0.8, SI=0.8965: BER=5.593875e-02
+
+ความสัมพันธ์ระหว่าง sigma_ln และ scintillation index คือ SI=exp(sigma_ln^2)-1 เมื่อ sigma_ln เพิ่ม การกระจายของ irradiance กว้างขึ้น แม้ค่าเฉลี่ย H ถูก normalize ให้เท่ากับหนึ่ง แต่จะเกิด deep fades บ่อยขึ้นและ BER สูงขึ้น
+
+3.2.7 FER และ CRC
+
+FER มีค่าสูงกว่า BER เพราะหนึ่งเฟรมถูกนับว่าผิดทันทีเมื่อ payload ผิดอย่างน้อยหนึ่งบิต CRC failure rate อาจสูงกว่า payload FER เพราะ CRC ครอบคลุม payload แต่ CRC field เองก็ถูกส่งผ่านช่องสัญญาณและสามารถเสียหายได้เช่นกัน เนื่องจากระบบไม่มี ECC เฟรมที่ CRC fail จะตรวจพบได้แต่ไม่สามารถซ่อมข้อมูล
+
+3.3 โค้ด Python ที่พัฒนาขึ้น
+----------------------------------
+
+โค้ดต่อไปนี้เป็นส่วนหลักที่พัฒนาขึ้นเองและถูกเรียกใช้จริงในการสร้างผลจำลอง รายละเอียดทั้งหมดอยู่ใน src/ccsds_optical_sim.py
+
+3.3.1 การแบ่งข้อความ ASCII เป็น payload
+---------------------------------------
+ฟังก์ชันนี้ตรวจว่าเป็น ASCII แท้ แบ่งครั้งละสองไบต์ และเติม 0x00 เมื่อจำนวนไบต์เป็นเลขคี่
+
+def ascii_to_payload_frames(message: str) -> tuple[np.ndarray, int, bool]:
+    """Encode ASCII and split it into fixed 16-bit payloads.
+
+    An odd-length message receives one trailing 0x00 padding byte.  The
+    original byte length is returned so that padding can be removed without
+    losing or inventing user data after reassembly.
+    """
+    try:
+        raw = message.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("The message must contain ASCII characters only.") from exc
+    if not raw:
+        raise ValueError("The message must not be empty.")
+
+    original_length = len(raw)
+    padded = bool(original_length % 2)
+    if padded:
+        raw += b"\x00"
+    byte_matrix = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 2)
+    frames = np.unpackbits(byte_matrix, axis=1, bitorder="big")
+    return frames.astype(np.uint8), original_length, padded
+
+
+3.3.2 การคำนวณ CCSDS optical CRC-32
+-----------------------------------
+ใช้ shift register แบบ MSB-first, initial state เป็น all ones และไม่มี final XOR
+
+def crc32_ccsds_optical(data_bits: np.ndarray) -> int:
+    """Compute the CCSDS 142.0-B-1 optical CRC-32, MSB first.
+
+    The all-ones register initialization is equivalent to the additive term
+    in the polynomial definition in section 3.6.2.  There is no final XOR.
+    """
+    register = CRC_MASK
+    for bit in np.asarray(data_bits, dtype=np.uint8).ravel():
+        feedback = ((register >> 31) & 1) ^ int(bit)
+        register = (register << 1) & CRC_MASK
+        if feedback:
+            register ^= CRC_POLY
+    return register
+
+
+3.3.3 การประกอบแพ็กเกจ
+----------------------
+นำ ASM, payload และ CRC มาต่อกันตามโครงสร้างย่อ 80 บิต
+
+def build_packet(payload_bits: np.ndarray) -> np.ndarray:
+    """Build ASM(32) + payload(16) + CRC(32)."""
+    payload = np.asarray(payload_bits, dtype=np.uint8).ravel()
+    if payload.size != PAYLOAD_BITS:
+        raise ValueError(f"Payload must contain exactly {PAYLOAD_BITS} bits.")
+    crc_bits = int_to_bits(crc32_ccsds_optical(payload), CRC_LENGTH)
+    return np.concatenate((ASM_BITS, payload, crc_bits))
+
+
+3.3.4 การทำ 4-PPM และ guard slot
+--------------------------------
+จับคู่สองบิตเป็นหนึ่ง symbol แล้วสร้าง one-hot slots พร้อม guard slot
+
+def ppm4_modulate(bits: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Map two bits to one of four slots and append one zero guard slot."""
+    bit_vector = np.asarray(bits, dtype=np.uint8).ravel()
+    if bit_vector.size % BITS_PER_PPM_SYMBOL:
+        raise ValueError("The bit count must be even for 4-PPM.")
+    pairs = bit_vector.reshape(-1, BITS_PER_PPM_SYMBOL)
+    symbols = (pairs[:, 0] << 1) | pairs[:, 1]
+    slots = np.zeros((symbols.size, SLOTS_PER_SYMBOL), dtype=np.uint8)
+    slots[np.arange(symbols.size), symbols] = 1
+    return symbols, slots.reshape(-1)
+
+
+3.3.5 ช่องสัญญาณ Poisson photon counting
+----------------------------------------
+ค่าเฉลี่ย count ของ ON slot คือ Nb+NsH ส่วน OFF/guard slot คือ Nb
+
+def photon_count_channel(
+    slots: np.ndarray,
+    signal_photons: float,
+    background_photons: float,
+    fading: float | np.ndarray,
+    rng: np.random.Generator,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Apply Poisson photon counting to binary OOK slots."""
+    if signal_photons < 0 or background_photons < 0:
+        raise ValueError("Photon means must be non-negative.")
+    binary_slots = np.asarray(slots, dtype=np.uint8)
+    lambdas = background_photons + signal_photons * np.asarray(fading) * binary_slots
+    return rng.poisson(lambdas), lambdas
+
+
+3.3.6 การดีมอดูเลต 4-PPM
+------------------------
+receiver เลือก data slot ที่มี count สูงสุดและสุ่มเฉพาะกรณี tie
+
+def ppm4_demodulate(received_counts: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
+    """Demodulate by maximum photon count; randomize exact ties."""
+    counts = np.asarray(received_counts)
+    if counts.size % SLOTS_PER_SYMBOL:
+        raise ValueError("Received count length must be a multiple of five slots.")
+    count_matrix = counts.reshape(-1, SLOTS_PER_SYMBOL)
+    data_counts = count_matrix[:, :PPM_ORDER]
+    tie_break = rng.random(data_counts.shape) * 1e-9
+    symbols = np.argmax(data_counts + tie_break, axis=1).astype(np.uint8)
+    bits = np.empty(symbols.size * BITS_PER_PPM_SYMBOL, dtype=np.uint8)
+    bits[0::2] = (symbols >> 1) & 1
+    bits[1::2] = symbols & 1
+    return bits, symbols
+
+
+3.3.7 การสร้าง log-normal turbulence ที่มีค่าเฉลี่ยหนึ่ง
+--------------------------------------------------------
+เลือก mean ของ ln(H) เป็น -sigma^2/2 เพื่อให้ E[H]=1
+
+def unit_mean_lognormal(
+    rng: np.random.Generator, sigma_ln: float, size: int | tuple[int, ...]
+) -> np.ndarray:
+    """Sample H with E[H]=1 and ln(H) standard deviation sigma_ln."""
+    if sigma_ln < 0:
+        raise ValueError("sigma_ln must be non-negative.")
+    if sigma_ln == 0:
+        return np.ones(size, dtype=float)
+    return rng.lognormal(mean=-0.5 * sigma_ln**2, sigma=sigma_ln, size=size)
+
+
+4. บทสรุป
+============
+
+งานนี้พัฒนาแบบจำลองลิงก์สื่อสารด้วยแสงสำหรับการศึกษาโดยอ้างอิงแนวคิดจาก CCSDS 141.0-B-1 และ CCSDS 142.0-B-1 ข้อมูล ASCII ถูกแบ่งเป็น payload ขนาด 16 บิต เติม ASM และ CRC-32 แล้วมอดูเลตด้วย 4-PPM พร้อม guard slot จากนั้นส่งผ่านช่องสัญญาณ Poisson photon-counting ที่มี log-normal atmospheric turbulence และดีมอดูเลตด้วย maximum-count detector
+
+ผล ideal/noiseless ยืนยันว่า ASCII conversion, padding, CRC, packet construction, 4-PPM mapping, guard insertion และ demodulation ทำงานถูกต้อง เมื่อเพิ่ม shot noise พบว่า BER ลดลงเมื่อจำนวน signal photons เพิ่มขึ้น เนื่องจาก ON slot แยกออกจาก OFF slots ได้ชัดเจนขึ้น Background photons ทำให้ OFF slots มี count สูงขึ้นและเพิ่มโอกาสเลือกตำแหน่งผิด ส่วน atmospheric turbulence ทำให้กำลังรับผันผวนและเกิด deep fades ส่งผลให้ BER และ FER สูงกว่ากรณี Poisson อย่างเดียว
+
+CRC สามารถตรวจจับความผิดพลาดได้แต่ไม่สามารถแก้ไขข้อมูล เนื่องจากระบบนี้ไม่มี ECC การเพิ่ม RS, LDPC หรือ SCPPM จึงเป็นแนวทางสำคัญสำหรับพัฒนาต่อ นอกจากนี้แบบจำลองยังสมมติ ideal timing และยังไม่รวม slot/frame synchronization, pointing loss, detector dark count, detector bandwidth, pulse-shape distortion และ link budget จากกำลังส่งจริง ดังนั้นผลที่รายงานควรตีความเป็นผลระดับ baseband/photon-counting เพื่อศึกษาพฤติกรรมของระบบ ไม่ใช่ผลรับรองสมรรถนะของฮาร์ดแวร์หรือ CCSDS-compliant modem แบบเต็ม
+
+ไฟล์ประกอบผลการจำลอง
+------------------------
+- report/block_output_trace.txt: เอาต์พุตทุกบล็อกและทุก PPM symbol
+- results/data/: ตารางตัวเลขดิบและผล Monte Carlo
+- results/figures/: กราฟสำหรับหัวข้อ 3.1 และ 3.2
+- src/ccsds_optical_sim.py: โปรแกรมจำลองหลัก
+- tests/test_ccsds_optical_sim.py: ชุดทดสอบความถูกต้องของฟังก์ชัน
