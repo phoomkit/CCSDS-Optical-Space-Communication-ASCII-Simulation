@@ -3,4 +3,5 @@ __pycache__/
 .matplotlib/
 .pytest_cache/
 .venv/
+tmp/
 

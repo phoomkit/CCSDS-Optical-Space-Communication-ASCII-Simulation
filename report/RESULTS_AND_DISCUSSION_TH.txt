@@ -1,7 +1,7 @@
 3. ผลการจำลองระบบและการอภิปรายผล
 =======================================
 
-ขอบเขตของงานนี้เป็นการจำลองระบบ CCSDS-inspired optical link สำหรับการศึกษา ไม่ใช่การทำ CCSDS 142.0-B-1 SCPPM แบบเต็ม ระบบใช้แพ็กเกจ ASM 32 บิต + payload 16 บิต + CRC-32 32 บิต แล้วทำ 4-PPM พร้อม guard slot หนึ่ง slot โดยไม่ใช้ RS, LDPC, convolutional encoder, interleaver, pseudo-randomizer หรือ SCPPM inner coding
+ขอบเขตของงานนี้เป็น shortened CCSDS-aligned optical link สำหรับการศึกษา ไม่ใช่ SCPPM modem แบบเต็ม ระบบใช้เฟรม ASM 32 บิต + payload 16 บิต + CRC-32 32 บิต เติม termination สองบิต แล้วใช้ convolutional encoder rate 1/3 ที่มี generator [5,7,7] octal ก่อนทำ 4-PPM พร้อม guard slot หนึ่ง slot ฝั่งรับใช้ hard-decision Viterbi decoder โดยไม่ใช้ RS, LDPC, pseudo-randomizer, SCPPM interleaver, accumulator หรือ iterative soft decoder
 
 3.1 ผลการจำลองระบบที่เอาต์พุตแต่ละบล็อก
 ------------------------------------------------
@@ -12,7 +12,7 @@
 
 ใช้ข้อความ "A" เป็นกรณีตรวจสอบ padding ตัวอักษร A มีค่า 0x41 และมีเพียง 8 บิต โปรแกรมจึงเติม 0x00 เพื่อให้ payload ครบ 16 บิต ได้ค่า 0x4100 การประกอบข้อความกลับใช้ความยาวเดิมหนึ่งไบต์ จึงตัดเฉพาะ padding ออกและไม่ทำให้ข้อมูล A สูญหาย
 
-ผล ideal/noiseless ใช้ค่า count=100 ใน ON slot และ count=0 ใน OFF/guard slot เพื่อแยกการตรวจสอบ logic ออกจากความสุ่มของ Poisson ผลที่ได้คือ packet bit error เท่ากับศูนย์, payload bit error เท่ากับศูนย์, CRC ผ่าน และข้อความหลัง demodulation ตรงกับอินพุตทุกประการ
+ผล ideal/noiseless ใช้ค่า count=100 ใน ON slot และ count=0 ใน OFF/guard slot เพื่อแยกการตรวจสอบ logic ออกจากความสุ่มของ Poisson ทั้งเส้นทาง uncoded และ coded ให้ packet bit error เท่ากับศูนย์, payload bit error เท่ากับศูนย์, CRC ผ่าน และข้อความหลัง decoding ตรงกับอินพุตทุกประการ
 
 รายละเอียดบิตและตารางครบทุก 4-PPM symbol อยู่ใน report/block_output_trace.txt และ results/data/block_output_table.csv ตารางดังกล่าวแสดง input bit pair, PPM index, slot vector, received counts, detected index และ output bit pair จึงสามารถตรวจย้อนกลับได้ทุกบล็อก
 
@@ -22,7 +22,7 @@ ASM ใช้ค่า 0x1ACFFC1D จำนวน 32 บิต payload มี 16
 
 3.1.3 การทำ 4-PPM และ guard slot
 
-บิตถูกจัดกลุ่มครั้งละ 2 บิตและแปลงเป็น index 0 ถึง 3 ได้แก่ 00->0, 01->1, 10->2 และ 11->3 จากนั้นสร้าง one-hot slot vector ความยาว 4 แล้วเติม guard slot เป็นศูนย์อีกหนึ่งตำแหน่ง ดังนั้นหนึ่งสัญลักษณ์ใช้ 5 slots แพ็กเกจ 80 บิตมี 40 สัญลักษณ์และใช้ทั้งหมด 200 slots เมื่อ slot width เท่ากับ 512 ns ระยะเวลาแพ็กเกจเท่ากับ 102.4 microseconds
+บิตถูกจัดกลุ่มครั้งละ 2 บิตและแปลงเป็น index 0 ถึง 3 ได้แก่ 00->0, 01->1, 10->2 และ 11->3 จากนั้นสร้าง one-hot slot vector ความยาว 4 แล้วเติม guard slotเป็นศูนย์อีกหนึ่งตำแหน่ง ระบบ uncoded ใช้ 80 บิตหรือ 40 symbols ส่วนระบบ coded ใช้ 246 บิตหรือ 123 symbols รวม 615 slots เมื่อ slot width เท่ากับ 512 ns ระยะเวลา coded frame เท่ากับ 314.88 microseconds
 
 3.1.4 กรณี noise ต่ำ
 
@@ -43,7 +43,9 @@ CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม�
 
 3.2.2 BER เทียบกับจำนวนโฟตอน
 
-เมื่อ Ns เพิ่มขึ้น separation ระหว่าง ON และ OFF photon-count distributions เพิ่มขึ้น โอกาสที่ receiver จะเลือก slot ผิดจึงลดลง ที่ Ns=5 และ Nb=0.1 ผล Poisson อย่างเดียวให้ BER=6.808750e-03 ส่วนเมื่อเพิ่ม log-normal turbulence ที่ sigma_ln=0.4 ได้ BER=1.831625e-02 แสดงว่า fading ทำให้บางเฟรมได้รับพลังงานต่ำกว่าค่าเฉลี่ยและเพิ่ม BER
+เมื่อ Ns เพิ่มขึ้น separation ระหว่าง ON และ OFF photon-count distributions เพิ่มขึ้น โอกาสที่ receiver จะเลือก slot ผิดจึงลดลง ที่ Ns=5 และ Nb=0.1 ระบบ uncoded ให้ BER=6.808750e-03 สำหรับ Poisson อย่างเดียวและ BER=1.831625e-02 เมื่อมี turbulence ส่วนระบบ convolutionally coded ให้ BER หลัง Viterbi เท่ากับ 4.000000e-05 และ 2.810000e-03 ตามลำดับ ความแตกต่างนี้แสดงความสามารถของ ECC ในการแก้ hard-decision errors แต่ต้องแลกกับ coded frame ที่ยาวขึ้น
+
+การเปรียบเทียบนี้กำหนดจำนวน signal photons ต่อ ON pulse เท่ากัน ระบบ coded ส่ง pulses มากกว่าและใช้ระยะเวลา 314.88 microseconds ต่อเฟรม เทียบกับ 102.4 microseconds ของ uncoded frame จึงใช้พลังงานรวมต่อ payload มากกว่า ผลนี้เป็นการเปรียบเทียบที่ operating point เดียวกัน ไม่ใช่ coding gain ที่ normalize ด้วยพลังงานต่อ information bit
 
 3.2.3 การตรวจสอบกับทฤษฎี
 
@@ -55,7 +57,7 @@ CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม�
 
 3.2.5 ผลของ background photons
 
-เมื่อคง Ns=5 และ sigma_ln=0.4 ได้ผลดังนี้:
+เพื่อแยกผลของ channel ออกจาก ECC การ sweep background ในหัวข้อนี้ใช้ uncoded baseline โดยคง Ns=5 และ sigma_ln=0.4 ได้ผลดังนี้:
 - Nb=0.00 photons/slot: BER=1.129500e-02
 - Nb=0.01 photons/slot: BER=1.230250e-02
 - Nb=0.10 photons/slot: BER=1.801750e-02
@@ -66,7 +68,7 @@ CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม�
 
 3.2.6 ผลของ atmospheric turbulence
 
-เมื่อคง Ns=5 และ Nb=0.1 ได้ผลดังนี้:
+การ sweep turbulence ในหัวข้อนี้ใช้ uncoded baseline โดยคง Ns=5 และ Nb=0.1 ได้ผลดังนี้:
 - sigma_ln=0.0, SI=0.0000: BER=6.597500e-03
 - sigma_ln=0.2, SI=0.0408: BER=9.338750e-03
 - sigma_ln=0.4, SI=0.1735: BER=1.750250e-02
@@ -77,12 +79,12 @@ CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม�
 
 3.2.7 FER และ CRC
 
-FER มีค่าสูงกว่า BER เพราะหนึ่งเฟรมถูกนับว่าผิดทันทีเมื่อ payload ผิดอย่างน้อยหนึ่งบิต CRC failure rate อาจสูงกว่า payload FER เพราะ CRC ครอบคลุม payload แต่ CRC field เองก็ถูกส่งผ่านช่องสัญญาณและสามารถเสียหายได้เช่นกัน เนื่องจากระบบไม่มี ECC เฟรมที่ CRC fail จะตรวจพบได้แต่ไม่สามารถซ่อมข้อมูล
+FER มีค่าสูงกว่า BER เพราะหนึ่งเฟรมถูกนับว่าผิดทันทีเมื่อ payload ผิดอย่างน้อยหนึ่งบิต ในระบบ uncoded CRC ตรวจพบแต่ซ่อมข้อมูลไม่ได้ ส่วนระบบ coded ให้ Viterbi decoder แก้ข้อผิดพลาดก่อนตรวจ CRC จึงควรพิจารณาทั้ง pre-decoder BER, post-decoder payload BER, FER และ CRC failure rate ร่วมกัน
 
 3.3 โค้ด Python ที่พัฒนาขึ้น
 ----------------------------------
 
-โค้ดต่อไปนี้เป็นส่วนหลักที่พัฒนาขึ้นเองและถูกเรียกใช้จริงในการสร้างผลจำลอง รายละเอียดทั้งหมดอยู่ใน src/ccsds_optical_sim.py
+โค้ดต่อไปนี้เป็นส่วนหลักที่พัฒนาขึ้นเองและถูกเรียกใช้จริงในการสร้างผลจำลอง รายละเอียดอยู่ใน src/ccsds_optical_sim.py และ src/convolutional_ecc.py
 
 3.3.1 การแบ่งข้อความ ASCII เป็น payload
 ---------------------------------------
@@ -212,14 +214,93 @@ def unit_mean_lognormal(
     return rng.lognormal(mean=-0.5 * sigma_ln**2, sigma=sigma_ln, size=size)
 
 
+3.3.8 Convolutional encoder rate 1/3
+------------------------------------
+สร้าง coded bits สามบิตต่อ input bit ด้วย generator [5,7,7] octal
+
+def convolutional_encode(bits: np.ndarray) -> np.ndarray:
+    """Encode one binary vector using the rate-1/3 ``[5, 7, 7]`` code.
+
+    Termination is deliberately separate.  Call :func:`append_zero_termination`
+    first when a zero final state is required.
+    """
+
+    vector = _validate_binary_array(bits, dimensions=(1,)).ravel()
+    output = np.empty(vector.size * CODE_RATE_DENOMINATOR, dtype=np.uint8)
+    state = 0
+    for index, input_bit in enumerate(vector):
+        bit = int(input_bit)
+        output[index * CODE_RATE_DENOMINATOR : (index + 1) * CODE_RATE_DENOMINATOR] = (
+            OUTPUT_BITS[state, bit]
+        )
+        state = int(NEXT_STATE[state, bit])
+    return output
+
+
+3.3.9 Hard-decision Viterbi decoder
+-----------------------------------
+เลือก survivor path ที่มี Hamming-distance metric ต่ำที่สุดและบังคับ final state เป็นศูนย์
+
+def viterbi_decode_hard(
+    received_bits: np.ndarray,
+    *,
+    terminated: bool = True,
+) -> ViterbiResult:
+    """Hard-decision Viterbi decode one rate-1/3 codeword.
+
+    The initial state is fixed to zero.  When ``terminated`` is true, the
+    final state is also fixed to zero and the two termination bits are removed
+    from ``decoded_bits``.
+    """
+
+    vector = _validate_binary_array(received_bits, dimensions=(1,)).ravel()
+    if vector.size % CODE_RATE_DENOMINATOR:
+        raise ValueError("A rate-1/3 codeword length must be divisible by three.")
+
+    symbol_count = vector.size // CODE_RATE_DENOMINATOR
+    received = vector.reshape(symbol_count, CODE_RATE_DENOMINATOR)
+    infinity = np.iinfo(np.int32).max // 4
+    metrics = np.full(N_STATES, infinity, dtype=np.int32)
+    metrics[0] = 0
+    predecessors = np.empty((symbol_count, N_STATES), dtype=np.uint8)
+    survivor_inputs = np.empty((symbol_count, N_STATES), dtype=np.uint8)
+
+    for time_index, received_symbol in enumerate(received):
+        next_metrics = np.full(N_STATES, infinity, dtype=np.int32)
+        for state, transitions in enumerate(INCOMING_TRANSITIONS):
+            for previous_state, input_bit in transitions:
+                branch_metric = int(
+                    np.count_nonzero(received_symbol != OUTPUT_BITS[previous_state, input_bit])
+                )
+                candidate = int(metrics[previous_state]) + branch_metric
+                if candidate < next_metrics[state]:
+                    next_metrics[state] = candidate
+                    predecessors[time_index, state] = previous_state
+                    survivor_inputs[time_index, state] = input_bit
+        metrics = next_metrics
+
+    final_state = 0 if terminated else int(np.argmin(metrics))
+    decoded = np.empty(symbol_count, dtype=np.uint8)
+    state = final_state
+    for time_index in range(symbol_count - 1, -1, -1):
+        decoded[time_index] = survivor_inputs[time_index, state]
+        state = int(predecessors[time_index, state])
+
+    if terminated:
+        if decoded.size < TERMINATION_BITS:
+            raise ValueError("The terminated codeword is too short.")
+        decoded = decoded[:-TERMINATION_BITS]
+    return ViterbiResult(decoded, int(metrics[final_state]), final_state)
+
+
 4. บทสรุป
 ============
 
-งานนี้พัฒนาแบบจำลองลิงก์สื่อสารด้วยแสงสำหรับการศึกษาโดยอ้างอิงแนวคิดจาก CCSDS 141.0-B-1 และ CCSDS 142.0-B-1 ข้อมูล ASCII ถูกแบ่งเป็น payload ขนาด 16 บิต เติม ASM และ CRC-32 แล้วมอดูเลตด้วย 4-PPM พร้อม guard slot จากนั้นส่งผ่านช่องสัญญาณ Poisson photon-counting ที่มี log-normal atmospheric turbulence และดีมอดูเลตด้วย maximum-count detector
+งานนี้พัฒนาแบบจำลองลิงก์สื่อสารด้วยแสงสำหรับการศึกษาโดยอ้างอิง CCSDS 141.0-B-2 และ CCSDS 142.0-B-2 ข้อมูล ASCII ถูกแบ่งเป็น payload ขนาด 16 บิต เติม ASM และ CRC-32 จากนั้นเปรียบเทียบการส่งแบบ uncoded กับ convolutional code rate 1/3 ก่อนมอดูเลตด้วย 4-PPM และส่งผ่าน Poisson photon-counting channel ที่มี log-normal atmospheric turbulence
 
-ผล ideal/noiseless ยืนยันว่า ASCII conversion, padding, CRC, packet construction, 4-PPM mapping, guard insertion และ demodulation ทำงานถูกต้อง เมื่อเพิ่ม shot noise พบว่า BER ลดลงเมื่อจำนวน signal photons เพิ่มขึ้น เนื่องจาก ON slot แยกออกจาก OFF slots ได้ชัดเจนขึ้น Background photons ทำให้ OFF slots มี count สูงขึ้นและเพิ่มโอกาสเลือกตำแหน่งผิด ส่วน atmospheric turbulence ทำให้กำลังรับผันผวนและเกิด deep fades ส่งผลให้ BER และ FER สูงกว่ากรณี Poisson อย่างเดียว
+ผล ideal/noiseless ยืนยันว่า ASCII conversion, padding, CRC, convolutional encoding, 4-PPM, Viterbi decoding และ message recovery ทำงานถูกต้อง เมื่อเพิ่ม shot noise พบว่า BER ลดลงเมื่อจำนวน signal photons เพิ่มขึ้น ระบบ coded สามารถแก้ข้อผิดพลาดจำนวนหนึ่งและลด post-decoder BER/FER ได้ แต่ต้องแลกกับจำนวน transmitted bits และระยะเวลาเฟรมที่เพิ่มขึ้น
 
-CRC สามารถตรวจจับความผิดพลาดได้แต่ไม่สามารถแก้ไขข้อมูล เนื่องจากระบบนี้ไม่มี ECC การเพิ่ม RS, LDPC หรือ SCPPM จึงเป็นแนวทางสำคัญสำหรับพัฒนาต่อ นอกจากนี้แบบจำลองยังสมมติ ideal timing และยังไม่รวม slot/frame synchronization, pointing loss, detector dark count, detector bandwidth, pulse-shape distortion และ link budget จากกำลังส่งจริง ดังนั้นผลที่รายงานควรตีความเป็นผลระดับ baseband/photon-counting เพื่อศึกษาพฤติกรรมของระบบ ไม่ใช่ผลรับรองสมรรถนะของฮาร์ดแวร์หรือ CCSDS-compliant modem แบบเต็ม
+แบบจำลองใช้ shortened frame และ hard-decision Viterbi เพื่อให้เหมาะกับ mini-project จึงไม่ได้รวม pseudo-randomizer, SCPPM interleaver, accumulator, iterative decoding, synchronization acquisition, pointing loss, detector bandwidth หรือ physical link budget ผลที่รายงานจึงเป็นผลระดับ baseband/photon-counting เพื่อการศึกษา ไม่ใช่ผลรับรองโมเด็ม CCSDS เต็มรูปแบบ
 
 ไฟล์ประกอบผลการจำลอง
 ------------------------
@@ -227,4 +308,5 @@ CRC สามารถตรวจจับความผิดพลาดไ�
 - results/data/: ตารางตัวเลขดิบและผล Monte Carlo
 - results/figures/: กราฟสำหรับหัวข้อ 3.1 และ 3.2
 - src/ccsds_optical_sim.py: โปรแกรมจำลองหลัก
+- src/convolutional_ecc.py: convolutional encoder และ Viterbi decoder
 - tests/test_ccsds_optical_sim.py: ชุดทดสอบความถูกต้องของฟังก์ชัน

@@ -68,6 +68,24 @@ class TestCcsdsOpticalSimulation(unittest.TestCase):
         values = sim.unit_mean_lognormal(np.random.default_rng(2), 0.4, 300_000)
         self.assertAlmostEqual(float(np.mean(values)), 1.0, delta=0.01)
 
+    def test_coded_message_dimensions_and_noiseless_recovery(self):
+        result = sim.simulate_message(
+            "HI",
+            signal_photons=100.0,
+            background_photons=0.0,
+            sigma_ln=0.0,
+            rng=np.random.default_rng(12),
+            coding=sim.CODING_CONVOLUTIONAL,
+        )
+        record = result["records"][0]
+        self.assertEqual(record["packet"].size, 80)
+        self.assertEqual(record["terminated_packet"].size, 82)
+        self.assertEqual(record["coded_bits"].size, 246)
+        self.assertEqual(record["tx_symbols"].size, 123)
+        self.assertEqual(record["tx_slots"].size, 615)
+        self.assertEqual(result["recovered_message"], "HI")
+        self.assertTrue(record["crc_pass"])
+
 
 if __name__ == "__main__":
     unittest.main()

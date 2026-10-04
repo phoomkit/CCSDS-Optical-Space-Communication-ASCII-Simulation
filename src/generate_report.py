@@ -41,13 +41,27 @@ def group_bits(bits: np.ndarray, width: int = 8) -> str:
     return " ".join(raw[index : index + width] for index in range(0, len(raw), width))
 
 
-def make_ideal_record(message: str) -> tuple[dict, dict]:
+def make_ideal_record(message: str, coding: str = sim.CODING_UNCODED) -> tuple[dict, dict]:
+    """Build a deterministic no-noise record for block-by-block validation."""
+
     payloads, original_length, padded = sim.ascii_to_payload_frames(message)
     payload = payloads[0]
     packet = sim.build_packet(payload)
-    symbols, slots = sim.ppm4_modulate(packet)
+    if coding == sim.CODING_CONVOLUTIONAL:
+        terminated = sim.append_zero_termination(packet)
+        modulation_bits = sim.convolutional_encode(terminated)
+    else:
+        terminated = None
+        modulation_bits = packet
+    symbols, slots = sim.ppm4_modulate(modulation_bits)
     counts = slots.astype(int) * 100
-    rx_packet, rx_symbols = sim.ppm4_demodulate(counts, np.random.default_rng(1))
+    demodulated_bits, rx_symbols = sim.ppm4_demodulate(counts, np.random.default_rng(1))
+    if coding == sim.CODING_CONVOLUTIONAL:
+        decoder = sim.viterbi_decode_hard(demodulated_bits, terminated=True)
+        rx_packet = decoder.decoded_bits
+    else:
+        decoder = None
+        rx_packet = demodulated_bits
     record = {
         "frame_index": 0,
         "payload": payload,
@@ -63,7 +77,18 @@ def make_ideal_record(message: str) -> tuple[dict, dict]:
         "bit_errors": int(np.count_nonzero(packet != rx_packet)),
         "payload_bit_errors": int(np.count_nonzero(payload != rx_packet[32:48])),
     }
+    if coding == sim.CODING_CONVOLUTIONAL:
+        record.update(
+            {
+                "terminated_packet": terminated,
+                "coded_bits": modulation_bits,
+                "rx_coded_bits": demodulated_bits,
+                "pre_decoder_bit_errors": int(np.count_nonzero(modulation_bits != demodulated_bits)),
+                "viterbi_path_metric": decoder.path_metric,
+            }
+        )
     metadata = {
+        "coding": coding,
         "message": message,
         "original_length": original_length,
         "padded": padded,
@@ -76,6 +101,7 @@ def make_ideal_record(message: str) -> tuple[dict, dict]:
 def make_verification_cases() -> list[dict]:
     ideal_hi_meta, ideal_hi = make_ideal_record("HI")
     ideal_a_meta, ideal_a = make_ideal_record("A")
+    ideal_coded_meta, ideal_coded = make_ideal_record("HI", sim.CODING_CONVOLUTIONAL)
 
     low_meta = sim.simulate_message(
         "HI",
@@ -94,17 +120,27 @@ def make_verification_cases() -> list[dict]:
         # Monte Carlo runs below.
         rng=np.random.default_rng(REPORT_SEED + 8),
     )
+    normal_coded_meta = sim.simulate_message(
+        "HI",
+        signal_photons=5.0,
+        background_photons=0.1,
+        sigma_ln=0.4,
+        rng=np.random.default_rng(REPORT_SEED + 8),
+        coding=sim.CODING_CONVOLUTIONAL,
+    )
     return [
         {"name": "ideal_HI", "description": "Ideal deterministic channel, no noise", "meta": ideal_hi_meta, "record": ideal_hi},
         {"name": "ideal_A_padding", "description": "Ideal channel with one 0x00 padding byte", "meta": ideal_a_meta, "record": ideal_a},
         {"name": "low_noise_HI", "description": "Poisson: Ns=20, Nb=0.01, no turbulence", "meta": low_meta, "record": low_meta["records"][0]},
         {"name": "normal_HI", "description": "Poisson: Ns=5, Nb=0.1, sigma_ln=0.4", "meta": normal_meta, "record": normal_meta["records"][0]},
+        {"name": "ideal_coded_HI", "description": "Ideal coded channel: rate-1/3 convolutional + Viterbi", "meta": ideal_coded_meta, "record": ideal_coded},
+        {"name": "normal_coded_HI", "description": "Coded Poisson: Ns=5, Nb=0.1, sigma_ln=0.4", "meta": normal_coded_meta, "record": normal_coded_meta["records"][0]},
     ]
 
 
 def write_block_trace(cases: list[dict]) -> None:
     lines = [
-        "ผลเอาต์พุตทีละบล็อกของระบบ CCSDS-inspired 4-PPM",
+        "ผลเอาต์พุตทีละบล็อกของระบบ shortened CCSDS-aligned 4-PPM",
         "=" * 72,
         "หมายเหตุ: ideal case ใช้ count=100 ใน ON slot และ count=0 ใน OFF/guard slot",
         "เพื่อพิสูจน์ความถูกต้องของ logic โดยแยกออกจากแบบจำลอง Poisson",
@@ -116,6 +152,8 @@ def write_block_trace(cases: list[dict]) -> None:
         meta = case["meta"]
         payload = record["payload"]
         packet = record["packet"]
+        modulation_bits = record.get("coded_bits", packet)
+        demodulated_bits = record.get("rx_coded_bits", record["rx_packet"])
         crc_value = sim.bits_to_int(packet[-32:])
         raw = meta["message"].encode("ascii")
         padded_bytes = np.packbits(payload, bitorder="big").tobytes()
@@ -136,6 +174,10 @@ def write_block_trace(cases: list[dict]) -> None:
                 f"CRC-32 hex                     : 0x{crc_value:08X}",
                 f"CRC-32 bits                    : {group_bits(packet[-32:])}",
                 f"Packet 80 bits                 : {group_bits(packet)}",
+                f"Coding mode                    : {meta.get('coding', sim.CODING_UNCODED)}",
+                f"Termination bits               : {group_bits(record['terminated_packet'][-2:]) if 'terminated_packet' in record else '-'}",
+                f"จำนวนบิตเข้า 4-PPM             : {modulation_bits.size}",
+                f"จำนวน errors ก่อน decoder      : {record.get('pre_decoder_bit_errors', record['bit_errors'])}",
                 f"Fading coefficient H           : {record['fading']:.6f}",
                 f"จำนวน packet bit errors        : {record['bit_errors']}",
                 f"จำนวน payload bit errors       : {record['payload_bit_errors']}",
@@ -149,8 +191,8 @@ def write_block_trace(cases: list[dict]) -> None:
         tx_slots = record["tx_slots"].reshape(-1, 5)
         counts = record["counts"].reshape(-1, 5)
         for index, (tx_symbol, rx_symbol) in enumerate(zip(record["tx_symbols"], record["rx_symbols"])):
-            input_pair = packet[2 * index : 2 * index + 2]
-            output_pair = record["rx_packet"][2 * index : 2 * index + 2]
+            input_pair = modulation_bits[2 * index : 2 * index + 2]
+            output_pair = demodulated_bits[2 * index : 2 * index + 2]
             slot_text = " ".join(str(int(value)) for value in tx_slots[index])
             count_text = " ".join(str(int(value)) for value in counts[index])
             lines.append(
@@ -230,14 +272,25 @@ def wilson_interval(errors: int, trials: int, z: float = 1.959963984540054) -> t
 
 
 def simulate_performance() -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    main_results = sim.run_ber_sweep(
+    uncoded_results = sim.run_ber_sweep(
         SIGNAL_POINTS,
         background_photons=0.1,
         sigma_ln=0.4,
         n_frames=N_BER_FRAMES,
         batch_size=BATCH_SIZE,
         seed=REPORT_SEED + 100,
+        coding=sim.CODING_UNCODED,
     )
+    coded_results = sim.run_ber_sweep(
+        SIGNAL_POINTS,
+        background_photons=0.1,
+        sigma_ln=0.4,
+        n_frames=N_BER_FRAMES,
+        batch_size=BATCH_SIZE,
+        seed=REPORT_SEED + 101,
+        coding=sim.CODING_CONVOLUTIONAL,
+    )
+    main_results = uncoded_results + coded_results
     for row in main_results:
         low, high = wilson_interval(row["payload_bit_errors"], row["payload_bits"])
         row["ber_ci95_low"] = low
@@ -277,7 +330,10 @@ def simulate_performance() -> tuple[list[dict], list[dict], list[dict], list[dic
         turbulence_results.append(row)
 
     theory_results = []
-    poisson_rows = [row for row in main_results if row["model"] == "Poisson only"]
+    poisson_rows = [
+        row for row in main_results
+        if row["model"] == "Poisson only" and row["coding"] == sim.CODING_UNCODED
+    ]
     for row in poisson_rows:
         theoretical_ber = theoretical_4ppm_ber(row["signal_photons"], row["background_photons"])
         theory_results.append(
@@ -294,7 +350,8 @@ def simulate_performance() -> tuple[list[dict], list[dict], list[dict], list[dic
 
 def write_rows(path: Path, rows: list[dict]) -> None:
     with path.open("w", newline="", encoding="utf-8") as stream:
-        writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+        columns = list(dict.fromkeys(key for row in rows for key in row))
+        writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
 
@@ -312,13 +369,14 @@ def plot_performance(
     sim.configure_plot_style()
 
     fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
-    for model in ("Poisson only", "Poisson + log-normal turbulence"):
-        rows = [row for row in main_results if row["model"] == model]
+    series = dict.fromkeys((row["coding"], row["model"]) for row in main_results)
+    for coding, model in series:
+        rows = [row for row in main_results if row["model"] == model and row["coding"] == coding]
         x = np.array([row["signal_photons"] for row in rows])
         y = np.array([log_value(row["ber"], row["payload_bits"]) for row in rows])
         low = np.array([max(row["ber_ci95_low"], 0.25 / row["payload_bits"]) for row in rows])
         high = np.array([max(row["ber_ci95_high"], 0.25 / row["payload_bits"]) for row in rows])
-        ax.semilogy(x, y, marker="o", linewidth=2, label=model)
+        ax.semilogy(x, y, marker="o", linewidth=2, label=f"{coding}; {model}")
         ax.fill_between(x, low, high, alpha=0.14)
     ax.set(xscale="log", xlabel="Mean signal photons per ON pulse, Ns", ylabel="Payload BER", title="BER versus mean detected signal photons")
     ax.legend()
@@ -326,11 +384,11 @@ def plot_performance(
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
-    for model in ("Poisson only", "Poisson + log-normal turbulence"):
-        rows = [row for row in main_results if row["model"] == model]
+    for coding, model in series:
+        rows = [row for row in main_results if row["model"] == model and row["coding"] == coding]
         x = np.array([row["count_snr_db"] for row in rows])
         y = np.array([log_value(row["ber"], row["payload_bits"]) for row in rows])
-        ax.semilogy(x, y, marker="o", linewidth=2, label=model)
+        ax.semilogy(x, y, marker="o", linewidth=2, label=f"{coding}; {model}")
     ax.set(xlabel="Nominal count-domain SNR (dB)", ylabel="Payload BER", title="BER versus nominal Poisson count-domain SNR")
     ax.legend()
     fig.savefig(FIGURES_DIR / "ber_vs_snr.png")
@@ -367,15 +425,18 @@ def plot_performance(
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 6), constrained_layout=True)
-    rows = [row for row in main_results if row["model"] == "Poisson + log-normal turbulence"]
-    x = np.array([row["signal_photons"] for row in rows])
-    for key, label, marker in (
-        ("fer", "Payload FER", "o"),
-        ("crc_failure_rate", "CRC failure rate", "s"),
-        ("undetected_payload_error_rate", "Undetected payload-error rate", "x"),
-    ):
-        y = np.array([log_value(row[key], row["frames"]) for row in rows])
-        ax.semilogy(x, y, marker=marker, linewidth=2, label=label)
+    for coding in (sim.CODING_UNCODED, sim.CODING_CONVOLUTIONAL):
+        rows = [
+            row for row in main_results
+            if row["model"] == "Poisson + log-normal turbulence" and row["coding"] == coding
+        ]
+        x = np.array([row["signal_photons"] for row in rows])
+        for key, label, marker in (
+            ("fer", "Payload FER", "o"),
+            ("crc_failure_rate", "CRC failure rate", "s"),
+        ):
+            y = np.array([log_value(row[key], row["frames"]) for row in rows])
+            ax.semilogy(x, y, marker=marker, linewidth=2, label=f"{coding}; {label}")
     ax.set(xscale="log", xlabel="Mean signal photons per ON pulse, Ns", ylabel="Rate", title="Frame and CRC results with turbulence")
     ax.legend()
     ax.text(
@@ -389,8 +450,15 @@ def plot_performance(
     plt.close(fig)
 
 
-def find_result(rows: list[dict], model: str, signal_photons: float) -> dict:
-    return next(row for row in rows if row["model"] == model and row["signal_photons"] == signal_photons)
+def find_result(
+    rows: list[dict], model: str, signal_photons: float, coding: str = sim.CODING_UNCODED
+) -> dict:
+    return next(
+        row for row in rows
+        if row["model"] == model
+        and row["signal_photons"] == signal_photons
+        and row["coding"] == coding
+    )
 
 
 def code_section(title: str, explanation: str, function) -> str:
@@ -406,6 +474,12 @@ def write_thai_report(
 ) -> None:
     poisson_5 = find_result(main_results, "Poisson only", 5.0)
     turbulent_5 = find_result(main_results, "Poisson + log-normal turbulence", 5.0)
+    coded_poisson_5 = find_result(
+        main_results, "Poisson only", 5.0, sim.CODING_CONVOLUTIONAL
+    )
+    coded_turbulent_5 = find_result(
+        main_results, "Poisson + log-normal turbulence", 5.0, sim.CODING_CONVOLUTIONAL
+    )
     theory_5 = next(row for row in theory_results if row["signal_photons"] == 5.0)
     low_case = next(case for case in cases if case["name"] == "low_noise_HI")
     normal_case = next(case for case in cases if case["name"] == "normal_HI")
@@ -422,7 +496,7 @@ def write_thai_report(
     report = f"""3. ผลการจำลองระบบและการอภิปรายผล
 =======================================
 
-ขอบเขตของงานนี้เป็นการจำลองระบบ CCSDS-inspired optical link สำหรับการศึกษา ไม่ใช่การทำ CCSDS 142.0-B-1 SCPPM แบบเต็ม ระบบใช้แพ็กเกจ ASM 32 บิต + payload 16 บิต + CRC-32 32 บิต แล้วทำ 4-PPM พร้อม guard slot หนึ่ง slot โดยไม่ใช้ RS, LDPC, convolutional encoder, interleaver, pseudo-randomizer หรือ SCPPM inner coding
+ขอบเขตของงานนี้เป็น shortened CCSDS-aligned optical link สำหรับการศึกษา ไม่ใช่ SCPPM modem แบบเต็ม ระบบใช้เฟรม ASM 32 บิต + payload 16 บิต + CRC-32 32 บิต เติม termination สองบิต แล้วใช้ convolutional encoder rate 1/3 ที่มี generator [5,7,7] octal ก่อนทำ 4-PPM พร้อม guard slot หนึ่ง slot ฝั่งรับใช้ hard-decision Viterbi decoder โดยไม่ใช้ RS, LDPC, pseudo-randomizer, SCPPM interleaver, accumulator หรือ iterative soft decoder
 
 3.1 ผลการจำลองระบบที่เอาต์พุตแต่ละบล็อก
 ------------------------------------------------
@@ -433,7 +507,7 @@ def write_thai_report(
 
 ใช้ข้อความ "A" เป็นกรณีตรวจสอบ padding ตัวอักษร A มีค่า 0x41 และมีเพียง 8 บิต โปรแกรมจึงเติม 0x00 เพื่อให้ payload ครบ 16 บิต ได้ค่า 0x4100 การประกอบข้อความกลับใช้ความยาวเดิมหนึ่งไบต์ จึงตัดเฉพาะ padding ออกและไม่ทำให้ข้อมูล A สูญหาย
 
-ผล ideal/noiseless ใช้ค่า count=100 ใน ON slot และ count=0 ใน OFF/guard slot เพื่อแยกการตรวจสอบ logic ออกจากความสุ่มของ Poisson ผลที่ได้คือ packet bit error เท่ากับศูนย์, payload bit error เท่ากับศูนย์, CRC ผ่าน และข้อความหลัง demodulation ตรงกับอินพุตทุกประการ
+ผล ideal/noiseless ใช้ค่า count=100 ใน ON slot และ count=0 ใน OFF/guard slot เพื่อแยกการตรวจสอบ logic ออกจากความสุ่มของ Poisson ทั้งเส้นทาง uncoded และ coded ให้ packet bit error เท่ากับศูนย์, payload bit error เท่ากับศูนย์, CRC ผ่าน และข้อความหลัง decoding ตรงกับอินพุตทุกประการ
 
 รายละเอียดบิตและตารางครบทุก 4-PPM symbol อยู่ใน report/block_output_trace.txt และ results/data/block_output_table.csv ตารางดังกล่าวแสดง input bit pair, PPM index, slot vector, received counts, detected index และ output bit pair จึงสามารถตรวจย้อนกลับได้ทุกบล็อก
 
@@ -443,7 +517,7 @@ ASM ใช้ค่า 0x1ACFFC1D จำนวน 32 บิต payload มี 16
 
 3.1.3 การทำ 4-PPM และ guard slot
 
-บิตถูกจัดกลุ่มครั้งละ 2 บิตและแปลงเป็น index 0 ถึง 3 ได้แก่ 00->0, 01->1, 10->2 และ 11->3 จากนั้นสร้าง one-hot slot vector ความยาว 4 แล้วเติม guard slot เป็นศูนย์อีกหนึ่งตำแหน่ง ดังนั้นหนึ่งสัญลักษณ์ใช้ 5 slots แพ็กเกจ 80 บิตมี 40 สัญลักษณ์และใช้ทั้งหมด 200 slots เมื่อ slot width เท่ากับ 512 ns ระยะเวลาแพ็กเกจเท่ากับ 102.4 microseconds
+บิตถูกจัดกลุ่มครั้งละ 2 บิตและแปลงเป็น index 0 ถึง 3 ได้แก่ 00->0, 01->1, 10->2 และ 11->3 จากนั้นสร้าง one-hot slot vector ความยาว 4 แล้วเติม guard slotเป็นศูนย์อีกหนึ่งตำแหน่ง ระบบ uncoded ใช้ 80 บิตหรือ 40 symbols ส่วนระบบ coded ใช้ 246 บิตหรือ 123 symbols รวม 615 slots เมื่อ slot width เท่ากับ 512 ns ระยะเวลา coded frame เท่ากับ 314.88 microseconds
 
 3.1.4 กรณี noise ต่ำ
 
@@ -464,7 +538,9 @@ CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม�
 
 3.2.2 BER เทียบกับจำนวนโฟตอน
 
-เมื่อ Ns เพิ่มขึ้น separation ระหว่าง ON และ OFF photon-count distributions เพิ่มขึ้น โอกาสที่ receiver จะเลือก slot ผิดจึงลดลง ที่ Ns=5 และ Nb=0.1 ผล Poisson อย่างเดียวให้ BER={poisson_5['ber']:.6e} ส่วนเมื่อเพิ่ม log-normal turbulence ที่ sigma_ln=0.4 ได้ BER={turbulent_5['ber']:.6e} แสดงว่า fading ทำให้บางเฟรมได้รับพลังงานต่ำกว่าค่าเฉลี่ยและเพิ่ม BER
+เมื่อ Ns เพิ่มขึ้น separation ระหว่าง ON และ OFF photon-count distributions เพิ่มขึ้น โอกาสที่ receiver จะเลือก slot ผิดจึงลดลง ที่ Ns=5 และ Nb=0.1 ระบบ uncoded ให้ BER={poisson_5['ber']:.6e} สำหรับ Poisson อย่างเดียวและ BER={turbulent_5['ber']:.6e} เมื่อมี turbulence ส่วนระบบ convolutionally coded ให้ BER หลัง Viterbi เท่ากับ {coded_poisson_5['ber']:.6e} และ {coded_turbulent_5['ber']:.6e} ตามลำดับ ความแตกต่างนี้แสดงความสามารถของ ECC ในการแก้ hard-decision errors แต่ต้องแลกกับ coded frame ที่ยาวขึ้น
+
+การเปรียบเทียบนี้กำหนดจำนวน signal photons ต่อ ON pulse เท่ากัน ระบบ coded ส่ง pulses มากกว่าและใช้ระยะเวลา 314.88 microseconds ต่อเฟรม เทียบกับ 102.4 microseconds ของ uncoded frame จึงใช้พลังงานรวมต่อ payload มากกว่า ผลนี้เป็นการเปรียบเทียบที่ operating point เดียวกัน ไม่ใช่ coding gain ที่ normalize ด้วยพลังงานต่อ information bit
 
 3.2.3 การตรวจสอบกับทฤษฎี
 
@@ -476,26 +552,26 @@ CRC ใช้ตรวจจับข้อผิดพลาดแต่ไม�
 
 3.2.5 ผลของ background photons
 
-เมื่อคง Ns=5 และ sigma_ln=0.4 ได้ผลดังนี้:
+เพื่อแยกผลของ channel ออกจาก ECC การ sweep background ในหัวข้อนี้ใช้ uncoded baseline โดยคง Ns=5 และ sigma_ln=0.4 ได้ผลดังนี้:
 {background_lines}
 
 เมื่อ Nb เพิ่ม OFF slots มีโอกาสเกิด photon counts สูงขึ้น จึงแข่งขันกับ ON slot มากขึ้นและทำให้ BER เพิ่มขึ้น
 
 3.2.6 ผลของ atmospheric turbulence
 
-เมื่อคง Ns=5 และ Nb=0.1 ได้ผลดังนี้:
+การ sweep turbulence ในหัวข้อนี้ใช้ uncoded baseline โดยคง Ns=5 และ Nb=0.1 ได้ผลดังนี้:
 {turbulence_lines}
 
 ความสัมพันธ์ระหว่าง sigma_ln และ scintillation index คือ SI=exp(sigma_ln^2)-1 เมื่อ sigma_ln เพิ่ม การกระจายของ irradiance กว้างขึ้น แม้ค่าเฉลี่ย H ถูก normalize ให้เท่ากับหนึ่ง แต่จะเกิด deep fades บ่อยขึ้นและ BER สูงขึ้น
 
 3.2.7 FER และ CRC
 
-FER มีค่าสูงกว่า BER เพราะหนึ่งเฟรมถูกนับว่าผิดทันทีเมื่อ payload ผิดอย่างน้อยหนึ่งบิต CRC failure rate อาจสูงกว่า payload FER เพราะ CRC ครอบคลุม payload แต่ CRC field เองก็ถูกส่งผ่านช่องสัญญาณและสามารถเสียหายได้เช่นกัน เนื่องจากระบบไม่มี ECC เฟรมที่ CRC fail จะตรวจพบได้แต่ไม่สามารถซ่อมข้อมูล
+FER มีค่าสูงกว่า BER เพราะหนึ่งเฟรมถูกนับว่าผิดทันทีเมื่อ payload ผิดอย่างน้อยหนึ่งบิต ในระบบ uncoded CRC ตรวจพบแต่ซ่อมข้อมูลไม่ได้ ส่วนระบบ coded ให้ Viterbi decoder แก้ข้อผิดพลาดก่อนตรวจ CRC จึงควรพิจารณาทั้ง pre-decoder BER, post-decoder payload BER, FER และ CRC failure rate ร่วมกัน
 
 3.3 โค้ด Python ที่พัฒนาขึ้น
 ----------------------------------
 
-โค้ดต่อไปนี้เป็นส่วนหลักที่พัฒนาขึ้นเองและถูกเรียกใช้จริงในการสร้างผลจำลอง รายละเอียดทั้งหมดอยู่ใน src/ccsds_optical_sim.py
+โค้ดต่อไปนี้เป็นส่วนหลักที่พัฒนาขึ้นเองและถูกเรียกใช้จริงในการสร้างผลจำลอง รายละเอียดอยู่ใน src/ccsds_optical_sim.py และ src/convolutional_ecc.py
 """
 
     report += code_section(
@@ -533,16 +609,26 @@ FER มีค่าสูงกว่า BER เพราะหนึ่งเ�
         "เลือก mean ของ ln(H) เป็น -sigma^2/2 เพื่อให้ E[H]=1",
         sim.unit_mean_lognormal,
     )
+    report += code_section(
+        "3.3.8 Convolutional encoder rate 1/3",
+        "สร้าง coded bits สามบิตต่อ input bit ด้วย generator [5,7,7] octal",
+        sim.convolutional_encode,
+    )
+    report += code_section(
+        "3.3.9 Hard-decision Viterbi decoder",
+        "เลือก survivor path ที่มี Hamming-distance metric ต่ำที่สุดและบังคับ final state เป็นศูนย์",
+        sim.viterbi_decode_hard,
+    )
 
     report += """
 4. บทสรุป
 ============
 
-งานนี้พัฒนาแบบจำลองลิงก์สื่อสารด้วยแสงสำหรับการศึกษาโดยอ้างอิงแนวคิดจาก CCSDS 141.0-B-1 และ CCSDS 142.0-B-1 ข้อมูล ASCII ถูกแบ่งเป็น payload ขนาด 16 บิต เติม ASM และ CRC-32 แล้วมอดูเลตด้วย 4-PPM พร้อม guard slot จากนั้นส่งผ่านช่องสัญญาณ Poisson photon-counting ที่มี log-normal atmospheric turbulence และดีมอดูเลตด้วย maximum-count detector
+งานนี้พัฒนาแบบจำลองลิงก์สื่อสารด้วยแสงสำหรับการศึกษาโดยอ้างอิง CCSDS 141.0-B-2 และ CCSDS 142.0-B-2 ข้อมูล ASCII ถูกแบ่งเป็น payload ขนาด 16 บิต เติม ASM และ CRC-32 จากนั้นเปรียบเทียบการส่งแบบ uncoded กับ convolutional code rate 1/3 ก่อนมอดูเลตด้วย 4-PPM และส่งผ่าน Poisson photon-counting channel ที่มี log-normal atmospheric turbulence
 
-ผล ideal/noiseless ยืนยันว่า ASCII conversion, padding, CRC, packet construction, 4-PPM mapping, guard insertion และ demodulation ทำงานถูกต้อง เมื่อเพิ่ม shot noise พบว่า BER ลดลงเมื่อจำนวน signal photons เพิ่มขึ้น เนื่องจาก ON slot แยกออกจาก OFF slots ได้ชัดเจนขึ้น Background photons ทำให้ OFF slots มี count สูงขึ้นและเพิ่มโอกาสเลือกตำแหน่งผิด ส่วน atmospheric turbulence ทำให้กำลังรับผันผวนและเกิด deep fades ส่งผลให้ BER และ FER สูงกว่ากรณี Poisson อย่างเดียว
+ผล ideal/noiseless ยืนยันว่า ASCII conversion, padding, CRC, convolutional encoding, 4-PPM, Viterbi decoding และ message recovery ทำงานถูกต้อง เมื่อเพิ่ม shot noise พบว่า BER ลดลงเมื่อจำนวน signal photons เพิ่มขึ้น ระบบ coded สามารถแก้ข้อผิดพลาดจำนวนหนึ่งและลด post-decoder BER/FER ได้ แต่ต้องแลกกับจำนวน transmitted bits และระยะเวลาเฟรมที่เพิ่มขึ้น
 
-CRC สามารถตรวจจับความผิดพลาดได้แต่ไม่สามารถแก้ไขข้อมูล เนื่องจากระบบนี้ไม่มี ECC การเพิ่ม RS, LDPC หรือ SCPPM จึงเป็นแนวทางสำคัญสำหรับพัฒนาต่อ นอกจากนี้แบบจำลองยังสมมติ ideal timing และยังไม่รวม slot/frame synchronization, pointing loss, detector dark count, detector bandwidth, pulse-shape distortion และ link budget จากกำลังส่งจริง ดังนั้นผลที่รายงานควรตีความเป็นผลระดับ baseband/photon-counting เพื่อศึกษาพฤติกรรมของระบบ ไม่ใช่ผลรับรองสมรรถนะของฮาร์ดแวร์หรือ CCSDS-compliant modem แบบเต็ม
+แบบจำลองใช้ shortened frame และ hard-decision Viterbi เพื่อให้เหมาะกับ mini-project จึงไม่ได้รวม pseudo-randomizer, SCPPM interleaver, accumulator, iterative decoding, synchronization acquisition, pointing loss, detector bandwidth หรือ physical link budget ผลที่รายงานจึงเป็นผลระดับ baseband/photon-counting เพื่อการศึกษา ไม่ใช่ผลรับรองโมเด็ม CCSDS เต็มรูปแบบ
 
 ไฟล์ประกอบผลการจำลอง
 ------------------------
@@ -550,6 +636,7 @@ CRC สามารถตรวจจับความผิดพลาดไ�
 - results/data/: ตารางตัวเลขดิบและผล Monte Carlo
 - results/figures/: กราฟสำหรับหัวข้อ 3.1 และ 3.2
 - src/ccsds_optical_sim.py: โปรแกรมจำลองหลัก
+- src/convolutional_ecc.py: convolutional encoder และ Viterbi decoder
 - tests/test_ccsds_optical_sim.py: ชุดทดสอบความถูกต้องของฟังก์ชัน
 """
     (REPORT_DIR / "RESULTS_AND_DISCUSSION_TH.txt").write_text(report, encoding="utf-8")
@@ -564,6 +651,8 @@ def main() -> int:
     sim.save_waveform_plot(cases[0]["record"], 512.0, FIGURES_DIR / "ideal_block_verification.png")
     sim.save_waveform_plot(cases[2]["record"], 512.0, FIGURES_DIR / "low_noise_block_verification.png")
     sim.save_waveform_plot(cases[3]["record"], 512.0, FIGURES_DIR / "normal_noise_block_verification.png")
+    sim.save_waveform_plot(cases[4]["record"], 512.0, FIGURES_DIR / "ideal_coded_block_verification.png")
+    sim.save_waveform_plot(cases[5]["record"], 512.0, FIGURES_DIR / "normal_coded_block_verification.png")
 
     main_results, background_results, turbulence_results, theory_results = simulate_performance()
     write_rows(DATA_DIR / "performance_results.csv", main_results)
